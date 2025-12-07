@@ -1,108 +1,89 @@
-# tests/test_cli.py
-import importlib
-import os
+import json
+import pytest
+from src.cli import main
 
-# Import the CLI module from the project (tests/conftest.py should put src/ first on sys.path)
-cli_mod = importlib.import_module("core.cli")
-main = getattr(cli_mod, "main")
+# --- Valid Model URL ---
+def test_cli_outputs_json_for_model(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text("https://huggingface.co/google/gemma-3-270m\n")
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    obj = json.loads(captured.out.strip())
+    assert obj["category"] == "MODEL"
 
-def _expand_like_cli(raw_items):
-    """
-    If we received raw CSV triplet lines, expand them into ordered URLs.
-    If we already received expanded URLs, just return them.
-    Expansion order per line is: code -> dataset -> model.
-    """
-    items = list(raw_items)
+# --- Skips Dataset ---
+def test_cli_skips_dataset(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text("https://huggingface.co/datasets/xlangai/AgentNet\n")
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    assert captured.out.strip() == ""
 
-    # Already expanded? (all items are http links without commas)
-    if items and all(isinstance(x, str) and x.strip().startswith(("http://", "https://")) and ("," not in x) for x in items):
-        return items
-
-    # Otherwise treat as raw CSV lines and expand with the same rules used by core.cli
-    out = []
-    for raw in items:
-        line = (raw or "").strip()
-        if not line:
-            continue
-        cells = [p.strip() for p in (line.split(",", 2) + ["", "", ""])[:3]]
-        code, dataset, model = cells[0], cells[1], cells[2]
-        if code.startswith(("http://", "https://")):
-            out.append(code)
-        if dataset.startswith(("http://", "https://")):
-            out.append(dataset)
-        if model.startswith(("http://", "https://")):
-            out.append(model)
-    return out
-
-
-def test_cli_main_expands_urls_in_order(monkeypatch, tmp_path):
-    # Build a triplet file with a mix of blank/non-HTTP cells
-    src = tmp_path / "urls.txt"
-    src.write_text(
-        "a,b,c\n"                     # ignored (no http)
-        "https://x,y,https://z\n"     # => x (code), z (model)
-        "https://a,,\n"               # => a
-        ",https://b,\n"               # => b
-        ",,https://c\n"               # => c
+# --- Multiple URLs ---
+def test_cli_multiple_urls(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text(
+        "https://huggingface.co/google/gemma-3-270m\n"
+        "https://huggingface.co/datasets/xlangai/AgentNet\n"
     )
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    lines = captured.out.strip().splitlines()
+    assert len(lines) == 1  # only the model
 
-    captured = {"raw": None, "expanded": None, "called": False, "wrote": False}
+# --- Invalid File ---
+def test_cli_missing_file(tmp_path, capsys):
+    bad_file = tmp_path / "does_not_exist.txt"
+    with pytest.raises(SystemExit):
+        main(str(bad_file))
+    captured = capsys.readouterr()
+    assert "Error: File not found" in captured.err
 
-    def fake_collate(it):
-        # Capture what main() is passing us, then normalize to URL expansion
-        captured["raw"] = list(it)
-        captured["expanded"] = _expand_like_cli(captured["raw"])
-        captured["called"] = True
-        # Yield a minimal valid row so main() completes
-        yield {
-            "name": "m",
-            "category": "MODEL",
-            "net_score": 0.5,
-            "net_score_latency": 1,
-            "ramp_up_time": 1,
-            "ramp_up_time_latency": 1,
-            "bus_factor": 0,
-            "bus_factor_latency": 0,
-            "performance_claims": 0,
-            "performance_claims_latency": 0,
-            "license": 1,
-            "license_latency": 0,
-            "size_score": {},
-            "size_score_latency": 0,
-            "dataset_and_code_score": 0,
-            "dataset_and_code_score_latency": 0,
-            "dataset_quality": 0,
-            "dataset_quality_latency": 0,
-            "code_quality": 0,
-            "code_quality_latency": 0,
-        }
+# --- Empty File ---
+def test_cli_empty_file(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text("")
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    assert captured.out.strip() == ""
 
-    def fake_write(rows, out=None):
-        captured["wrote"] = True
-        for _ in rows:
-            pass
-
-    # Keep logs quiet and HF progress bars off, and stub collate/write
-    monkeypatch.setenv("LOG_LEVEL", "0")
-    monkeypatch.setenv("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    monkeypatch.setattr(cli_mod, "collate", fake_collate)
-    monkeypatch.setattr(cli_mod, "write_rows", fake_write)
-
-    rc = main(["prog", str(src)])
-    assert rc == 0
-    assert captured["called"] and captured["wrote"]
-
-    # Expected expansion order (code -> dataset -> model within a line)
-    assert captured["expanded"] == [
-        "https://x",
-        "https://z",
-        "https://a",
-        "https://b",
-        "https://c",
-    ]
+# --- Invalid URL ---
+def test_cli_invalid_url(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text("not_a_real_url\n")
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    assert captured.out.strip() == ""  # no crash
 
 
-def test_cli_main_usage_message(capsys):
-    rc = main(["prog"])
-    assert rc == 1
-    assert "Usage:" in capsys.readouterr().err
+# --- Non-Model URL ---
+def test_cli_non_model_url(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text("https://github.com/SkyworkAI/Matrix-Game\n")
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    assert captured.out.strip() == ""  # ignored since not a model
+ 
+
+# --- Multiple Models ---
+def test_cli_multiple_models(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text(
+        "https://huggingface.co/google/model1\n"
+        "https://huggingface.co/google/model2\n"
+    )
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    lines = captured.out.strip().splitlines()
+    assert len(lines) == 2
+    objs = [json.loads(line) for line in lines]
+    assert all(o["category"] == "MODEL" for o in objs)
+
+# --- NDJSON Validity ---
+def test_cli_ndjson_output(tmp_path, capsys):
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text("https://huggingface.co/google/gemma-3-270m\n")
+    main(str(urls_file))
+    captured = capsys.readouterr()
+    for line in captured.out.strip().splitlines():
+        json.loads(line)  # must be valid JSON

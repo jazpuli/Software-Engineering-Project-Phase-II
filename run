@@ -1,44 +1,52 @@
-set -euo pipefail
+#!/usr/bin/env python3
+import sys
+import subprocess
+from src.cli import main
 
-if [[ -z "${PYTHONPATH:-}" ]]; then
-  export PYTHONPATH="src"
-else
-  export PYTHONPATH="src:${PYTHONPATH}"
-fi
+if len(sys.argv) < 2:
+    sys.exit("Usage: ./run [install|test|URL_FILE]")
 
-export HF_HUB_DISABLE_PROGRESS_BARS=1
+CMD = sys.argv[1]
 
-cmd="${1:-}"
-if [[ -z "$cmd" ]]; then
-  echo "Usage: ./run {install|test|URL_FILE}" >&2
-  exit 1
-fi
+if CMD == "install":
+    subprocess.run([sys.executable, "-m", "pip", "install", "--user", "-r", "requirements.txt"], check=True)
 
-if [[ "$cmd" == "install" ]]; then
-  python3 -m pip install --user -U pip
-  python3 -m pip install --user -U .
-  exit 0
-fi
+elif CMD == "test":
+    import json, os
 
-if [[ "$cmd" == "test" ]]; then
-  python3 -m pytest -q --maxfail=1
-  cov=$(python3 - <<'PY'
-from coverage import Coverage
-try:
-    c=Coverage(); c.load(); print(int(c.report(skip_covered=False, show_missing=False)))
-except Exception: print(0)
-PY
-)
-  total=$(pytest --collect-only -q | grep -c '::' || echo 0)
-  passed=$(pytest -q 2>&1 | grep -Eo '== ([0-9]+) passed' | awk '{print $2}' || echo 0)
-  echo "${passed}/${total} test cases passed. ${cov}% line coverage achieved."
-  exit 0
-fi
+    # Run coverage on pytest
+    subprocess.run([sys.executable, "-m", "coverage", "run", "-m", "pytest"], check=False)
+    subprocess.run([sys.executable, "-m", "coverage", "json", "-o", "coverage.json"], check=False)
 
-if [[ -f "$cmd" ]]; then
-  python3 -m core.cli "$cmd"
-  exit $?
-fi
+    # Count tests passed
+    pytest_result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--disable-warnings"],
+        capture_output=True,
+        text=True
+    )
 
-echo "Unknown command: $cmd" >&2
-exit 1
+    passed = total = 0
+    for line in pytest_result.stdout.strip().splitlines():
+        if "passed" in line or "failed" in line:
+            try:
+                total = int(line.split()[0])
+                if "passed" in line:
+                    passed = total
+            except:
+                pass
+
+    # Read coverage
+    coverage = 0
+    if os.path.exists("coverage.json"):
+        with open("coverage.json") as f:
+            cov_report = json.load(f)
+            coverage = int(cov_report["totals"]["percent_covered"])
+
+    print(f"{passed}/{total} test cases passed. {coverage}% line coverage achieved.")
+    if passed < total or coverage < 80:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+else:
+    main(CMD)

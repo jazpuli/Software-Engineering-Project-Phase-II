@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Trustworthy Model Registry - A registry for ML artifacts with trust metrics and lineage tracking">
+  <title>Trustworthy Model Registry</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header role="banner">
+    <div class="container">
+      <a href="/static/index.html" class="logo" aria-label="Trustworthy Model Registry Home">
+        <div class="logo-icon" aria-hidden="true"></div>
+        <span>Model Registry</span>
+      </a>
+      <nav role="navigation" aria-label="Main navigation">
+        <a href="/static/index.html" class="active">Artifacts</a>
+        <a href="/static/upload.html">Upload</a>
+        <a href="/static/health.html">Health</a>
+        <a href="/docs" target="_blank" rel="noopener">API Docs</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content" role="main">
+    <div class="container">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+        <div>
+          <h1 style="margin-bottom: 0.25rem;">Artifact Registry</h1>
+          <p style="margin: 0; color: var(--color-text-muted);">Browse and search ML models, datasets, and notebooks with trust metrics.</p>
+        </div>
+        <a href="/static/upload.html" class="btn btn-primary">+ Upload Artifact</a>
+      </div>
+
+      <!-- Search Bar -->
+      <div class="search-bar" role="search">
+        <label for="search-input" class="visually-hidden">Search artifacts</label>
+        <input
+          type="text"
+          id="search-input"
+          placeholder="Search by name (regex supported)..."
+          aria-label="Search artifacts by name">
+        <button class="btn btn-primary" id="search-btn" type="button">Search</button>
+        <button class="btn btn-secondary" id="clear-btn" type="button">Clear</button>
+      </div>
+
+      <!-- Results -->
+      <section aria-label="Artifact list">
+        <div id="loading" class="spinner" aria-label="Loading artifacts"></div>
+        <div id="artifacts-list" aria-live="polite"></div>
+        <div id="empty-state" class="empty-state" style="display: none;">
+          <h3>No artifacts found</h3>
+          <p>Upload or ingest a model to get started.</p>
+          <a href="/static/upload.html" class="btn btn-primary">Upload Artifact</a>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer role="contentinfo">
+    <div class="container">
+      <p>&copy; 2024 Trustworthy Model Registry</p>
+      <p>
+        <a href="/health">System Health</a> |
+        <a href="/docs">API Documentation</a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    // Initialize artifact list on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      loadArtifacts();
+
+      // Search functionality
+      document.getElementById('search-btn').addEventListener('click', searchArtifacts);
+      document.getElementById('clear-btn').addEventListener('click', () => {
+        document.getElementById('search-input').value = '';
+        loadArtifacts();
+      });
+      document.getElementById('search-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') searchArtifacts();
+      });
+    });
+
+    async function loadArtifacts() {
+      showLoading(true);
+      try {
+        const response = await fetch('/artifacts');
+        const data = await response.json();
+        renderArtifacts(data.artifacts);
+      } catch (error) {
+        showError('Failed to load artifacts: ' + error.message);
+      }
+      showLoading(false);
+    }
+
+    async function searchArtifacts() {
+      const query = document.getElementById('search-input').value.trim();
+      if (!query) {
+        loadArtifacts();
+        return;
+      }
+
+      showLoading(true);
+      try {
+        const response = await fetch(`/artifacts/search?query=${encodeURIComponent(query)}`);
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Search failed');
+        }
+        const data = await response.json();
+        renderArtifacts(data.results);
+      } catch (error) {
+        showError('Search failed: ' + error.message);
+      }
+      showLoading(false);
+    }
+
+    function renderArtifacts(artifacts) {
+      const container = document.getElementById('artifacts-list');
+      const emptyState = document.getElementById('empty-state');
+
+      if (!artifacts || artifacts.length === 0) {
+        container.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+      }
+
+      emptyState.style.display = 'none';
+      container.innerHTML = artifacts.map(artifact => `
+        <article class="card fade-in">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">
+                <a href="/static/artifact.html?id=${artifact.id}&type=${artifact.type}">${escapeHtml(artifact.name)}</a>
+              </h2>
+              <p class="card-meta">
+                <span class="badge badge-${artifact.type}">${artifact.type}</span>
+                Created: ${formatDate(artifact.created_at)}
+              </p>
+            </div>
+            <div>
+              <a href="/static/artifact.html?id=${artifact.id}&type=${artifact.type}" class="btn btn-secondary">View Details</a>
+            </div>
+          </div>
+          <p>Source: <a href="${escapeHtml(artifact.url)}" target="_blank" rel="noopener">${escapeHtml(artifact.url)}</a></p>
+          ${artifact.download_url ? `<p>Download: <a href="${escapeHtml(artifact.download_url)}" target="_blank" rel="noopener">Available</a></p>` : ''}
+        </article>
+      `).join('');
+    }
+
+    function showLoading(show) {
+      document.getElementById('loading').style.display = show ? 'block' : 'none';
+    }
+
+    function showError(message) {
+      const container = document.getElementById('artifacts-list');
+      container.innerHTML = `<div class="alert alert-error" role="alert">${escapeHtml(message)}</div>`;
+    }
+  </script>
+</body>
+</html>
+

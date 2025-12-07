@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="System Health - Trustworthy Model Registry">
+  <title>System Health - Model Registry</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header role="banner">
+    <div class="container">
+      <a href="/static/index.html" class="logo" aria-label="Trustworthy Model Registry Home">
+        <div class="logo-icon" aria-hidden="true"></div>
+        <span>Model Registry</span>
+      </a>
+      <nav role="navigation" aria-label="Main navigation">
+        <a href="/static/index.html">Artifacts</a>
+        <a href="/static/upload.html">Upload</a>
+        <a href="/static/health.html" class="active">Health</a>
+        <a href="/docs" target="_blank" rel="noopener">API Docs</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content" role="main">
+    <div class="container">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem;">
+        <h1>System Health</h1>
+        <div>
+          <button class="btn btn-secondary" id="refresh-btn">Refresh</button>
+          <button class="btn btn-danger" id="reset-btn">Reset Registry</button>
+        </div>
+      </div>
+
+      <div id="loading" class="spinner" aria-label="Loading health data"></div>
+
+      <div id="health-content" style="display: none;">
+        <!-- Overall Status -->
+        <section class="card" aria-labelledby="status-heading">
+          <h2 id="status-heading">Overall Status</h2>
+          <div style="display: flex; align-items: center; gap: 1rem;">
+            <div id="overall-status" class="status">
+              <span class="status-dot"></span>
+              <span class="status-text"></span>
+            </div>
+            <span id="uptime" class="card-meta"></span>
+          </div>
+        </section>
+
+        <!-- Component Status -->
+        <section class="card" aria-labelledby="components-heading">
+          <h2 id="components-heading">Component Status</h2>
+          <div id="components-list" class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Component</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Last Check</th>
+                  <th scope="col">Message</th>
+                </tr>
+              </thead>
+              <tbody id="components-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Request Statistics -->
+        <section class="card" aria-labelledby="stats-heading">
+          <h2 id="stats-heading">Request Statistics (Last Hour)</h2>
+          <div id="no-stats" style="display: none;">
+            <p class="card-meta">No request data available yet.</p>
+          </div>
+          <div id="stats-content">
+            <div class="metrics-grid" id="stats-grid"></div>
+
+            <h3 style="margin-top: 1.5rem;">Endpoint Details</h3>
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Endpoint</th>
+                    <th scope="col">Requests</th>
+                    <th scope="col">Errors</th>
+                    <th scope="col">Avg Latency</th>
+                  </tr>
+                </thead>
+                <tbody id="endpoints-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="error-state" class="alert alert-error" style="display: none;" role="alert"></div>
+    </div>
+  </main>
+
+  <footer role="contentinfo">
+    <div class="container">
+      <p>&copy; 2024 Trustworthy Model Registry</p>
+      <p>
+        <a href="/health">System Health</a> |
+        <a href="/docs">API Documentation</a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      loadHealth();
+
+      document.getElementById('refresh-btn').addEventListener('click', loadHealth);
+      document.getElementById('reset-btn').addEventListener('click', resetRegistry);
+
+      // Auto-refresh every 30 seconds
+      setInterval(loadHealth, 30000);
+    });
+
+    async function loadHealth() {
+      showLoading(true);
+      try {
+        const [healthData, componentsData] = await Promise.all([
+          health.get(),
+          health.components()
+        ]);
+
+        renderOverallStatus(healthData, componentsData);
+        renderComponents(componentsData);
+        renderStats(healthData);
+
+        document.getElementById('health-content').style.display = 'block';
+        document.getElementById('error-state').style.display = 'none';
+      } catch (error) {
+        showError('Failed to load health data: ' + error.message);
+      }
+      showLoading(false);
+    }
+
+    function renderOverallStatus(healthData, componentsData) {
+      const statusEl = document.getElementById('overall-status');
+      const status = componentsData.overall_status;
+
+      statusEl.className = `status ${getStatusClass(status)}`;
+      statusEl.querySelector('.status-text').textContent = status.charAt(0).toUpperCase() + status.slice(1);
+
+      // Uptime
+      const uptimeEl = document.getElementById('uptime');
+      const uptime = healthData.uptime_seconds;
+      if (uptime > 0) {
+        const hours = Math.floor(uptime / 3600);
+        const minutes = Math.floor((uptime % 3600) / 60);
+        uptimeEl.textContent = `Uptime: ${hours}h ${minutes}m`;
+      } else {
+        uptimeEl.textContent = '';
+      }
+    }
+
+    function renderComponents(data) {
+      const tbody = document.getElementById('components-body');
+      tbody.innerHTML = data.components.map(component => `
+        <tr>
+          <td><strong>${escapeHtml(component.name)}</strong></td>
+          <td>
+            <span class="status ${getStatusClass(component.status)}">
+              <span class="status-dot"></span>
+              ${component.status}
+            </span>
+          </td>
+          <td>${formatDate(component.last_check)}</td>
+          <td>${escapeHtml(component.message || '-')}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderStats(data) {
+      const requestCounts = data.request_counts || {};
+      const errorCounts = data.error_counts || {};
+      const avgLatency = data.avg_latency_ms || {};
+
+      const totalRequests = Object.values(requestCounts).reduce((a, b) => a + b, 0);
+      const totalErrors = Object.values(errorCounts).reduce((a, b) => a + b, 0);
+      const avgLatencies = Object.values(avgLatency);
+      const overallLatency = avgLatencies.length > 0
+        ? avgLatencies.reduce((a, b) => a + b, 0) / avgLatencies.length
+        : 0;
+
+      if (totalRequests === 0) {
+        document.getElementById('no-stats').style.display = 'block';
+        document.getElementById('stats-content').style.display = 'none';
+        return;
+      }
+
+      document.getElementById('no-stats').style.display = 'none';
+      document.getElementById('stats-content').style.display = 'block';
+
+      // Summary metrics
+      const statsGrid = document.getElementById('stats-grid');
+      statsGrid.innerHTML = `
+        <div class="metric-card">
+          <div class="metric-label">Total Requests</div>
+          <div class="metric-value">${totalRequests}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Total Errors</div>
+          <div class="metric-value ${totalErrors > 0 ? 'score-low' : 'score-high'}">${totalErrors}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Error Rate</div>
+          <div class="metric-value ${(totalErrors/totalRequests) > 0.1 ? 'score-low' : 'score-high'}">${((totalErrors / totalRequests) * 100).toFixed(1)}%</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Avg Latency</div>
+          <div class="metric-value">${overallLatency.toFixed(0)} ms</div>
+        </div>
+      `;
+
+      // Endpoint details
+      const endpoints = new Set([
+        ...Object.keys(requestCounts),
+        ...Object.keys(errorCounts),
+        ...Object.keys(avgLatency)
+      ]);
+
+      const tbody = document.getElementById('endpoints-body');
+      tbody.innerHTML = Array.from(endpoints).sort().map(endpoint => `
+        <tr>
+          <td><code>${escapeHtml(endpoint)}</code></td>
+          <td>${requestCounts[endpoint] || 0}</td>
+          <td>${errorCounts[endpoint] || 0}</td>
+          <td>${(avgLatency[endpoint] || 0).toFixed(0)} ms</td>
+        </tr>
+      `).join('');
+    }
+
+    async function resetRegistry() {
+      if (!confirmAction('Are you sure you want to reset the registry? This will delete ALL artifacts, ratings, and lineage data!')) {
+        return;
+      }
+
+      const btn = document.getElementById('reset-btn');
+      btn.disabled = true;
+      btn.textContent = 'Resetting...';
+
+      try {
+        await system.reset();
+        showNotification('Registry reset successfully!', 'success');
+        loadHealth();
+      } catch (error) {
+        showNotification('Failed to reset registry: ' + error.message, 'error');
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Reset Registry';
+    }
+
+    function showLoading(show) {
+      document.getElementById('loading').style.display = show ? 'block' : 'none';
+    }
+
+    function showError(message) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('health-content').style.display = 'none';
+      const errorEl = document.getElementById('error-state');
+      errorEl.textContent = message;
+      errorEl.style.display = 'block';
+    }
+  </script>
+</body>
+</html>
+

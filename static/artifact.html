@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Artifact Details - Trustworthy Model Registry">
+  <title>Artifact Details - Model Registry</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header role="banner">
+    <div class="container">
+      <a href="/static/index.html" class="logo" aria-label="Trustworthy Model Registry Home">
+        <div class="logo-icon" aria-hidden="true"></div>
+        <span>Model Registry</span>
+      </a>
+      <nav role="navigation" aria-label="Main navigation">
+        <a href="/static/index.html">Artifacts</a>
+        <a href="/static/upload.html">Upload</a>
+        <a href="/static/health.html">Health</a>
+        <a href="/docs" target="_blank" rel="noopener">API Docs</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content" role="main">
+    <div class="container">
+      <div id="loading" class="spinner" aria-label="Loading artifact details"></div>
+
+      <div id="artifact-details" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem;">
+          <div>
+            <h1 id="artifact-name">Loading...</h1>
+            <p class="card-meta">
+              <span id="artifact-type" class="badge"></span>
+              <span id="artifact-created"></span>
+            </p>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" id="rate-btn">Rate Artifact</button>
+            <button class="btn btn-secondary" id="download-btn">Download</button>
+            <button class="btn btn-danger" id="delete-btn">Delete</button>
+          </div>
+        </div>
+
+        <!-- Info Card -->
+        <section class="card" aria-labelledby="info-heading">
+          <h2 id="info-heading">Artifact Information</h2>
+          <dl style="display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem;">
+            <dt>ID:</dt>
+            <dd id="artifact-id" style="font-family: var(--font-mono);"></dd>
+            <dt>Source URL:</dt>
+            <dd><a id="artifact-url" href="#" target="_blank" rel="noopener"></a></dd>
+            <dt>Download URL:</dt>
+            <dd id="artifact-download-url"></dd>
+            <dt>Size:</dt>
+            <dd id="artifact-size"></dd>
+          </dl>
+        </section>
+
+        <!-- Rating Card -->
+        <section class="card" aria-labelledby="rating-heading">
+          <h2 id="rating-heading">Trust Metrics</h2>
+          <div id="no-rating" style="display: none;">
+            <p class="card-meta">No rating available. Click "Rate Artifact" to compute metrics.</p>
+          </div>
+          <div id="rating-content" style="display: none;">
+            <div style="text-align: center; margin-bottom: 1.5rem;">
+              <div class="metric-label">Net Score</div>
+              <div id="net-score" class="score"></div>
+            </div>
+            <div class="metrics-grid" id="metrics-grid"></div>
+          </div>
+        </section>
+
+        <!-- Lineage Card -->
+        <section class="card" aria-labelledby="lineage-heading">
+          <h2 id="lineage-heading">Lineage</h2>
+          <div id="lineage-content">
+            <p class="card-meta">Loading lineage data...</p>
+          </div>
+        </section>
+
+        <!-- Cost Card -->
+        <section class="card" aria-labelledby="cost-heading">
+          <h2 id="cost-heading">Storage Cost</h2>
+          <div id="cost-content">
+            <p class="card-meta">Loading cost data...</p>
+          </div>
+        </section>
+      </div>
+
+      <div id="error-state" class="alert alert-error" style="display: none;" role="alert"></div>
+    </div>
+  </main>
+
+  <footer role="contentinfo">
+    <div class="container">
+      <p>&copy; 2024 Trustworthy Model Registry</p>
+      <p>
+        <a href="/health">System Health</a> |
+        <a href="/docs">API Documentation</a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    let currentArtifact = null;
+    let artifactType = null;
+    let artifactId = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const params = new URLSearchParams(window.location.search);
+      artifactId = params.get('id');
+      artifactType = params.get('type');
+
+      if (!artifactId || !artifactType) {
+        showError('Missing artifact ID or type in URL');
+        return;
+      }
+
+      loadArtifact();
+
+      // Event listeners
+      document.getElementById('rate-btn').addEventListener('click', rateArtifact);
+      document.getElementById('download-btn').addEventListener('click', downloadArtifact);
+      document.getElementById('delete-btn').addEventListener('click', deleteArtifact);
+    });
+
+    async function loadArtifact() {
+      showLoading(true);
+      try {
+        currentArtifact = await artifacts.get(artifactType, artifactId);
+        renderArtifact(currentArtifact);
+
+        // Load additional data
+        loadRating();
+        loadLineage();
+        loadCost();
+      } catch (error) {
+        showError('Failed to load artifact: ' + error.message);
+      }
+      showLoading(false);
+    }
+
+    function renderArtifact(artifact) {
+      document.getElementById('artifact-details').style.display = 'block';
+      document.getElementById('artifact-name').textContent = artifact.name;
+      document.getElementById('artifact-id').textContent = artifact.id;
+
+      const typeEl = document.getElementById('artifact-type');
+      typeEl.textContent = artifact.type;
+      typeEl.className = `badge badge-${artifact.type}`;
+
+      document.getElementById('artifact-created').textContent = 'Created: ' + formatDate(artifact.created_at);
+
+      const urlEl = document.getElementById('artifact-url');
+      urlEl.href = artifact.url;
+      urlEl.textContent = artifact.url;
+
+      const downloadUrl = document.getElementById('artifact-download-url');
+      if (artifact.download_url) {
+        downloadUrl.innerHTML = `<a href="${escapeHtml(artifact.download_url)}" target="_blank" rel="noopener">Available</a>`;
+      } else {
+        downloadUrl.textContent = 'Not available';
+      }
+
+      document.getElementById('artifact-size').textContent = artifact.size_bytes
+        ? formatBytes(artifact.size_bytes)
+        : 'Unknown';
+
+      document.title = `${artifact.name} - Model Registry`;
+    }
+
+    async function loadRating() {
+      try {
+        const rating = await artifacts.getRating(artifactType, artifactId);
+        renderRating(rating);
+      } catch (error) {
+        document.getElementById('no-rating').style.display = 'block';
+        document.getElementById('rating-content').style.display = 'none';
+      }
+    }
+
+    function renderRating(rating) {
+      document.getElementById('no-rating').style.display = 'none';
+      document.getElementById('rating-content').style.display = 'block';
+
+      const netScoreEl = document.getElementById('net-score');
+      netScoreEl.textContent = formatScore(rating.net_score);
+      netScoreEl.className = `score ${getScoreClass(rating.net_score)}`;
+
+      const metrics = [
+        { label: 'Ramp Up Time', value: rating.ramp_up_time },
+        { label: 'Bus Factor', value: rating.bus_factor },
+        { label: 'License', value: rating.license },
+        { label: 'Performance Claims', value: rating.performance_claims },
+        { label: 'Dataset & Code', value: rating.dataset_and_code_score },
+        { label: 'Dataset Quality', value: rating.dataset_quality },
+        { label: 'Code Quality', value: rating.code_quality },
+        { label: 'Reproducibility', value: rating.reproducibility },
+        { label: 'Reviewedness', value: rating.reviewedness },
+        { label: 'Treescore', value: rating.treescore },
+      ];
+
+      const grid = document.getElementById('metrics-grid');
+      grid.innerHTML = metrics.map(m => `
+        <div class="metric-card">
+          <div class="metric-label">${m.label}</div>
+          <div class="metric-value ${getScoreClass(m.value)}">${formatScore(m.value)}</div>
+        </div>
+      `).join('');
+
+      // Add size scores
+      if (rating.size_score) {
+        const sizeMetrics = [
+          { label: 'Raspberry Pi', value: rating.size_score.raspberry_pi },
+          { label: 'Jetson Nano', value: rating.size_score.jetson_nano },
+          { label: 'Desktop PC', value: rating.size_score.desktop_pc },
+          { label: 'AWS Server', value: rating.size_score.aws_server },
+        ];
+        grid.innerHTML += '<div style="grid-column: 1 / -1; margin-top: 1rem;"><strong>Size Scores by Hardware Target</strong></div>';
+        grid.innerHTML += sizeMetrics.map(m => `
+          <div class="metric-card">
+            <div class="metric-label">${m.label}</div>
+            <div class="metric-value ${getScoreClass(m.value)}">${formatScore(m.value)}</div>
+          </div>
+        `).join('');
+      }
+    }
+
+    async function loadLineage() {
+      try {
+        const lineage = await artifacts.getLineage(artifactType, artifactId);
+        renderLineage(lineage);
+      } catch (error) {
+        document.getElementById('lineage-content').innerHTML =
+          '<p class="card-meta">Could not load lineage data.</p>';
+      }
+    }
+
+    function renderLineage(lineage) {
+      const content = document.getElementById('lineage-content');
+
+      let html = '';
+
+      if (lineage.parents.length > 0) {
+        html += '<h4>Parent Artifacts</h4><ul>';
+        lineage.parents.forEach(p => {
+          html += `<li><a href="/static/artifact.html?id=${p.id}&type=${p.type}">${escapeHtml(p.name)}</a> <span class="badge badge-${p.type}">${p.type}</span></li>`;
+        });
+        html += '</ul>';
+      }
+
+      if (lineage.children.length > 0) {
+        html += '<h4>Child Artifacts</h4><ul>';
+        lineage.children.forEach(c => {
+          html += `<li><a href="/static/artifact.html?id=${c.id}&type=${c.type}">${escapeHtml(c.name)}</a> <span class="badge badge-${c.type}">${c.type}</span></li>`;
+        });
+        html += '</ul>';
+      }
+
+      if (!html) {
+        html = '<p class="card-meta">No lineage relationships found.</p>';
+      }
+
+      content.innerHTML = html;
+    }
+
+    async function loadCost() {
+      try {
+        const cost = await artifacts.getCost(artifactType, artifactId);
+        renderCost(cost);
+      } catch (error) {
+        document.getElementById('cost-content').innerHTML =
+          '<p class="card-meta">Could not load cost data.</p>';
+      }
+    }
+
+    function renderCost(cost) {
+      const content = document.getElementById('cost-content');
+      content.innerHTML = `
+        <dl style="display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem;">
+          <dt>Own Size:</dt>
+          <dd>${formatBytes(cost.own_size_bytes)}</dd>
+          <dt>Dependencies Size:</dt>
+          <dd>${formatBytes(cost.dependencies_size_bytes)}</dd>
+          <dt><strong>Total Size:</strong></dt>
+          <dd><strong>${formatBytes(cost.total_size_bytes)}</strong></dd>
+        </dl>
+      `;
+    }
+
+    async function rateArtifact() {
+      const btn = document.getElementById('rate-btn');
+      btn.disabled = true;
+      btn.textContent = 'Rating...';
+
+      try {
+        const rating = await artifacts.rate(artifactType, artifactId);
+        renderRating(rating);
+        showNotification('Artifact rated successfully!', 'success');
+      } catch (error) {
+        showNotification('Failed to rate artifact: ' + error.message, 'error');
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Rate Artifact';
+    }
+
+    async function downloadArtifact() {
+      try {
+        const data = await artifacts.download(artifactType, artifactId);
+        if (data.download_url) {
+          window.open(data.download_url, '_blank');
+        } else {
+          showNotification('No download URL available', 'warning');
+        }
+      } catch (error) {
+        showNotification('Failed to get download URL: ' + error.message, 'error');
+      }
+    }
+
+    async function deleteArtifact() {
+      if (!confirmAction('Are you sure you want to delete this artifact? This cannot be undone.')) {
+        return;
+      }
+
+      try {
+        await artifacts.delete(artifactType, artifactId);
+        showNotification('Artifact deleted successfully!', 'success');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 1500);
+      } catch (error) {
+        showNotification('Failed to delete artifact: ' + error.message, 'error');
+      }
+    }
+
+    function showLoading(show) {
+      document.getElementById('loading').style.display = show ? 'block' : 'none';
+    }
+
+    function showError(message) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('artifact-details').style.display = 'none';
+      const errorEl = document.getElementById('error-state');
+      errorEl.textContent = message;
+      errorEl.style.display = 'block';
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+  </script>
+</body>
+</html>
+
