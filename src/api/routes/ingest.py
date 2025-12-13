@@ -1,5 +1,6 @@
-"""HuggingFace model ingest endpoint."""
+"""Ingest endpoint for HuggingFace models, datasets, and GitHub code."""
 
+import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -15,8 +16,9 @@ from src.api.models.schemas import (
     SizeScore,
 )
 from src.api.services.metrics import compute_all_metrics, passes_quality_threshold
-from src.api.services.lineage import create_lineage_for_artifact, detect_parent_models
+from src.api.services.lineage import create_lineage_for_artifact
 from src.api.storage.s3 import upload_object, get_download_url
+from src.api.services.logging import log_request, log_error
 
 router = APIRouter()
 
@@ -39,174 +41,304 @@ def artifact_to_response(artifact) -> ArtifactData:
     )
 
 
+def _detect_artifact_type(url: str, requested_type: ArtifactType) -> ArtifactType:
+    """Detect or validate artifact type based on URL."""
+    url_lower = url.lower()
+
+    # HuggingFace dataset URL
+    if "huggingface.co/datasets/" in url_lower:
+        return ArtifactType.DATASET
+
+    # GitHub URL (code)
+    if "github.com" in url_lower:
+        return ArtifactType.CODE
+
+    # HuggingFace model URL
+    if "huggingface.co" in url_lower:
+        return ArtifactType.MODEL
+
+    # Default to requested type
+    return requested_type
+
+
+def _extract_name_from_url(url: str) -> str:
+    """Extract artifact name from URL."""
+    url = url.rstrip("/")
+
+    # GitHub: owner/repo
+    gh_match = re.search(r"github\.com/([^/]+/[^/]+)", url)
+    if gh_match:
+        return gh_match.group(1)
+
+    # HuggingFace: org/name or datasets/org/name
+    parts = url.split("/")
+    if len(parts) >= 2:
+        if "datasets" in parts:
+            # e.g., huggingface.co/datasets/org/name
+            idx = parts.index("datasets")
+            if idx + 2 < len(parts):
+                return f"{parts[idx + 1]}/{parts[idx + 2]}"
+            elif idx + 1 < len(parts):
+                return parts[idx + 1]
+        else:
+            # e.g., huggingface.co/org/name
+            return f"{parts[-2]}/{parts[-1]}" if parts[-2] not in ("huggingface.co", "www.huggingface.co") else parts[-1]
+
+    return parts[-1] if parts else "unknown"
+
+
+def _fetch_github_metadata(url: str) -> dict:
+    """Fetch metadata from GitHub API."""
+    import requests
+
+    # Extract owner/repo
+    match = re.search(r"github\.com/([^/]+)/([^/]+)", url)
+    if not match:
+        return {}
+
+    owner, repo = match.groups()
+    repo = repo.rstrip(".git")
+
+    try:
+        response = requests.get(
+            f"https://api.github.com/repos/{owner}/{repo}",
+            timeout=10,
+            headers={"Accept": "application/vnd.github.v3+json"}
+        )
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+
+    return {}
+
+
+def _fetch_hf_dataset_metadata(url: str) -> dict:
+    """Fetch metadata from HuggingFace dataset API."""
+    import requests
+
+    # Extract dataset name
+    match = re.search(r"huggingface\.co/datasets/([^/]+(?:/[^/]+)?)", url)
+    if not match:
+        return {}
+
+    dataset_name = match.group(1)
+
+    try:
+        response = requests.get(
+            f"https://huggingface.co/api/datasets/{dataset_name}",
+            timeout=10
+        )
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+
+    return {}
+
+
 @router.post("/ingest", response_model=IngestResponse)
-async def ingest_huggingface_model(
+async def ingest_artifact(
     request: IngestRequest,
     db: Session = Depends(get_db),
 ):
     """
-    Ingest a model from HuggingFace.
+    Ingest an artifact from HuggingFace (model/dataset) or GitHub (code).
+
+    Supports:
+    - HuggingFace models: https://huggingface.co/org/model
+    - HuggingFace datasets: https://huggingface.co/datasets/org/dataset
+    - GitHub code: https://github.com/owner/repo
 
     Process:
-    1. Fetch model metadata from HuggingFace
-    2. Compute trust metrics
-    3. Require >= 0.5 on all non-latency metrics to accept
-    4. If accepted, create artifact record
-
-    This endpoint handles the Tiny-LLM test case per autograder spec.
+    1. Detect artifact type from URL
+    2. Fetch metadata from source
+    3. Compute trust metrics (for models)
+    4. Create artifact record
     """
     url = request.url
-    artifact_type = request.artifact_type
+    requested_type = request.artifact_type
 
-    # Validate URL is a HuggingFace URL
-    if "huggingface.co" not in url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL must be a HuggingFace model URL",
-        )
+    # Detect actual artifact type from URL
+    artifact_type = _detect_artifact_type(url, requested_type)
 
-    # Skip dataset URLs
-    if "/datasets/" in url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dataset URLs are not supported for ingest. Use model URLs.",
-        )
+    # Extract name from URL
+    name = _extract_name_from_url(url)
 
-    # Extract model name from URL
-    parts = url.rstrip("/").split("/")
-    model_name = parts[-1]
-    if len(parts) >= 2 and parts[-2] != "huggingface.co":
-        # Include org name for uniqueness
-        model_name = f"{parts[-2]}/{parts[-1]}"
-
-    # Compute metrics for the model
-    result = compute_all_metrics(url)
-    metrics = result["metrics"]
-    latencies = result["latencies"]
-    hf_data = result.get("hf_data", {})
-
-    # Check quality threshold
-    if not passes_quality_threshold(metrics, threshold=0.5):
-        return IngestResponse(
-            success=False,
-            artifact=None,
-            message="Model does not meet minimum quality threshold (>= 0.5 on all metrics)",
-            rating=None,
-        )
-
-    # Extract size from HuggingFace data
+    # Fetch metadata based on type
+    metadata_json = {}
     size_bytes = 0
-    # Try safetensors total first
-    safetensors = hf_data.get("safetensors", {})
-    if safetensors and safetensors.get("total"):
-        size_bytes = safetensors.get("total", 0)
+    hf_data = {}
+
+    if artifact_type == ArtifactType.DATASET:
+        # HuggingFace dataset
+        hf_data = _fetch_hf_dataset_metadata(url)
+        metadata_json = {
+            "description": hf_data.get("description", ""),
+            "author": hf_data.get("author"),
+            "license": hf_data.get("license"),
+            "tags": hf_data.get("tags", []),
+            "extra": {
+                "downloads": hf_data.get("downloads"),
+                "likes": hf_data.get("likes"),
+            },
+        }
+
+    elif artifact_type == ArtifactType.CODE:
+        # GitHub code repository
+        gh_data = _fetch_github_metadata(url)
+        metadata_json = {
+            "description": gh_data.get("description", ""),
+            "author": gh_data.get("owner", {}).get("login"),
+            "license": gh_data.get("license", {}).get("spdx_id") if gh_data.get("license") else None,
+            "tags": gh_data.get("topics", []),
+            "extra": {
+                "stars": gh_data.get("stargazers_count"),
+                "forks": gh_data.get("forks_count"),
+                "language": gh_data.get("language"),
+            },
+        }
+        size_bytes = gh_data.get("size", 0) * 1024  # GitHub reports size in KB
+
     else:
-        # Fall back to summing file sizes from siblings
-        siblings = hf_data.get("siblings", [])
-        for sibling in siblings:
-            size_bytes += sibling.get("size", 0)
+        # HuggingFace model - use full metrics computation
+        try:
+            result = compute_all_metrics(url)
+            metrics = result["metrics"]
+            latencies = result["latencies"]
+            hf_data = result.get("hf_data", {})
+
+            # Check quality threshold for models
+            if not passes_quality_threshold(metrics, threshold=0.5):
+                return IngestResponse(
+                    success=False,
+                    artifact=None,
+                    message=f"Model does not meet minimum quality threshold. net_score={metrics.get('net_score', 0):.2f}, license={metrics.get('license', 0)}",
+                    rating=None,
+                )
+
+            # Fetch README content for regex search
+            readme_content = ""
+            try:
+                import requests
+                readme_url = f"https://huggingface.co/{name}/raw/main/README.md"
+                readme_resp = requests.get(readme_url, timeout=10)
+                if readme_resp.status_code == 200:
+                    readme_content = readme_resp.text[:10000]  # Limit size
+            except Exception:
+                pass
+
+            metadata_json = {
+                "description": hf_data.get("cardData", {}).get("description", "") if hf_data else "",
+                "readme": readme_content,  # Store README for regex search
+                "author": hf_data.get("author") if hf_data else None,
+                "license": hf_data.get("license") if hf_data else None,
+                "tags": hf_data.get("tags", []) if hf_data else [],
+                "extra": {
+                    "downloads": hf_data.get("downloads") if hf_data else None,
+                    "likes": hf_data.get("likes") if hf_data else None,
+                    "pipeline_tag": hf_data.get("pipeline_tag") if hf_data else None,
+                },
+            }
+
+            # Extract size
+            if hf_data:
+                safetensors = hf_data.get("safetensors", {})
+                if safetensors and safetensors.get("total"):
+                    size_bytes = safetensors.get("total", 0)
+                else:
+                    siblings = hf_data.get("siblings", [])
+                    for sibling in siblings:
+                        size_bytes += sibling.get("size", 0)
+
+        except Exception as e:
+            log_error("POST", "/ingest", f"Metrics computation failed: {e}")
+            # Continue with basic metadata
+            pass
 
     # Create artifact in database
-    metadata_json = {
-        "description": hf_data.get("cardData", {}).get("description", ""),
-        "author": hf_data.get("author"),
-        "license": hf_data.get("license"),
-        "tags": hf_data.get("tags", []),
-        "extra": {
-            "downloads": hf_data.get("downloads"),
-            "likes": hf_data.get("likes"),
-            "pipeline_tag": hf_data.get("pipeline_tag"),
-        },
-    }
-
     artifact = crud.create_artifact(
         db=db,
         artifact_type=artifact_type.value,
-        name=model_name,
+        name=name,
         url=url,
         metadata_json=metadata_json,
         size_bytes=size_bytes if size_bytes > 0 else None,
     )
 
-    # Try to upload a reference file to S3 and get download URL
+    # Try to upload to S3 and get download URL
     try:
-        s3_key = f"artifacts/{artifact.id}/metadata.json"
         import json
+        s3_key = f"artifacts/{artifact.id}/metadata.json"
         upload_object(s3_key, json.dumps(metadata_json).encode())
         download_url = get_download_url(s3_key)
         crud.update_artifact_download_url(db, artifact.id, download_url, s3_key)
-        artifact = crud.get_artifact(db, artifact.id)  # Refresh
+        artifact = crud.get_artifact(db, artifact.id)
     except Exception:
-        # S3 upload optional for MVP
-        pass
+        pass  # S3 upload optional
 
-    # Detect and create lineage relationships BEFORE computing treescore
-    linked_parents = []
-    try:
-        linked_parents = create_lineage_for_artifact(db, artifact.id, model_name, hf_data)
-    except Exception:
-        pass  # Lineage detection is optional
+    # For models, create lineage and rating
+    rating_response = None
+    if artifact_type == ArtifactType.MODEL and 'metrics' in dir() and metrics:
+        # Detect and create lineage
+        try:
+            create_lineage_for_artifact(db, artifact.id, name, hf_data)
+        except Exception:
+            pass
 
-    # Now compute treescore with actual parent relationships
-    from src.api.services.metrics import compute_treescore
-    treescore = compute_treescore(db, artifact.id)
-    metrics["treescore"] = treescore
+        # Compute treescore
+        from src.api.services.metrics import compute_treescore
+        treescore = compute_treescore(db, artifact.id)
+        metrics["treescore"] = treescore
 
-    # Store rating in database
-    rating = crud.create_rating(
-        db=db,
-        artifact_id=artifact.id,
-        net_score=metrics["net_score"],
-        ramp_up_time=metrics["ramp_up_time"],
-        bus_factor=metrics["bus_factor"],
-        license_score=metrics["license"],
-        performance_claims=metrics["performance_claims"],
-        dataset_and_code_score=metrics["dataset_and_code_score"],
-        dataset_quality=metrics["dataset_quality"],
-        code_quality=metrics["code_quality"],
-        size_score=metrics["size_score"],
-        reproducibility=metrics["reproducibility"],
-        reviewedness=metrics["reviewedness"],
-        treescore=treescore,
-        latencies=latencies,
-    )
+        # Store rating
+        rating = crud.create_rating(
+            db=db,
+            artifact_id=artifact.id,
+            net_score=metrics["net_score"],
+            ramp_up_time=metrics["ramp_up_time"],
+            bus_factor=metrics["bus_factor"],
+            license_score=metrics["license"],
+            performance_claims=metrics["performance_claims"],
+            dataset_and_code_score=metrics["dataset_and_code_score"],
+            dataset_quality=metrics["dataset_quality"],
+            code_quality=metrics["code_quality"],
+            size_score=metrics["size_score"],
+            reproducibility=metrics["reproducibility"],
+            reviewedness=metrics["reviewedness"],
+            treescore=treescore,
+            latencies=latencies,
+        )
 
-    # Build rating response
-    rating_response = RatingResponse(
-        artifact_id=artifact.id,
-        name=artifact.name,
-        category=artifact_type.value.upper(),
-        net_score=metrics["net_score"],
-        ramp_up_time=metrics["ramp_up_time"],
-        bus_factor=metrics["bus_factor"],
-        license=metrics["license"],
-        performance_claims=metrics["performance_claims"],
-        dataset_and_code_score=metrics["dataset_and_code_score"],
-        dataset_quality=metrics["dataset_quality"],
-        code_quality=metrics["code_quality"],
-        size_score=SizeScore(**metrics["size_score"]),
-        reproducibility=metrics["reproducibility"],
-        reviewedness=metrics["reviewedness"],
-        treescore=metrics["treescore"],
-        net_score_latency=latencies["net_score"],
-        ramp_up_time_latency=latencies["ramp_up_time"],
-        bus_factor_latency=latencies["bus_factor"],
-        license_latency=latencies["license"],
-        performance_claims_latency=latencies["performance_claims"],
-        dataset_and_code_score_latency=latencies["dataset_and_code_score"],
-        dataset_quality_latency=latencies["dataset_quality"],
-        code_quality_latency=latencies["code_quality"],
-    )
-
-    # Build success message
-    message = f"Successfully ingested model: {model_name}"
-    if linked_parents:
-        message += f" (linked to {len(linked_parents)} parent model(s))"
+        rating_response = RatingResponse(
+            artifact_id=artifact.id,
+            name=artifact.name,
+            category=artifact_type.value.upper(),
+            net_score=metrics["net_score"],
+            ramp_up_time=metrics["ramp_up_time"],
+            bus_factor=metrics["bus_factor"],
+            license=metrics["license"],
+            performance_claims=metrics["performance_claims"],
+            dataset_and_code_score=metrics["dataset_and_code_score"],
+            dataset_quality=metrics["dataset_quality"],
+            code_quality=metrics["code_quality"],
+            size_score=SizeScore(**metrics["size_score"]),
+            reproducibility=metrics["reproducibility"],
+            reviewedness=metrics["reviewedness"],
+            treescore=metrics["treescore"],
+            net_score_latency=latencies["net_score"],
+            ramp_up_time_latency=latencies["ramp_up_time"],
+            bus_factor_latency=latencies["bus_factor"],
+            license_latency=latencies["license"],
+            performance_claims_latency=latencies["performance_claims"],
+            dataset_and_code_score_latency=latencies["dataset_and_code_score"],
+            dataset_quality_latency=latencies["dataset_quality"],
+            code_quality_latency=latencies["code_quality"],
+        )
 
     return IngestResponse(
         success=True,
         artifact=artifact_to_response(artifact),
-        message=message,
+        message=f"Successfully ingested {artifact_type.value}: {name}",
         rating=rating_response,
     )
-

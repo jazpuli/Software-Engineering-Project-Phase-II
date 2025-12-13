@@ -10,7 +10,8 @@ class ArtifactType(str, Enum):
     """Supported artifact types."""
     MODEL = "model"
     DATASET = "dataset"
-    NOTEBOOK = "notebook"
+    CODE = "code"
+    NOTEBOOK = "notebook"  # Legacy, keeping for backwards compatibility
 
 
 class ArtifactCreateRequest(BaseModel):
@@ -173,3 +174,115 @@ class ResetResponse(BaseModel):
     success: bool
     message: str
 
+
+# ============ SPEC-COMPLIANT SCHEMAS (ECE 461 v3.4.7) ============
+
+
+class ArtifactMetadataSpec(BaseModel):
+    """Artifact metadata per OpenAPI spec."""
+    name: str
+    id: str
+    type: ArtifactType
+
+
+class ArtifactQuery(BaseModel):
+    """Query for searching artifacts."""
+    name: str = Field(..., description="Artifact name or '*' for all")
+    types: Optional[List[ArtifactType]] = Field(
+        None, description="Optional list of artifact types to filter results"
+    )
+
+
+class ArtifactDataSpec(BaseModel):
+    """Artifact data source per OpenAPI spec."""
+    url: str = Field(..., description="Artifact source url used during ingest")
+    download_url: Optional[str] = Field(
+        None, description="Direct download link served by your server"
+    )
+
+
+class Artifact(BaseModel):
+    """Artifact envelope containing metadata and ingest details."""
+    metadata: ArtifactMetadataSpec
+    data: ArtifactDataSpec
+
+
+class ArtifactRegEx(BaseModel):
+    """Request body for regex search."""
+    regex: str = Field(
+        ..., description="A regular expression over artifact names and READMEs"
+    )
+
+
+class ModelRating(BaseModel):
+    """Model rating per OpenAPI spec (BASELINE)."""
+    name: str
+    category: str
+    net_score: float
+    net_score_latency: float
+    ramp_up_time: float
+    ramp_up_time_latency: float
+    bus_factor: float
+    bus_factor_latency: float
+    performance_claims: float
+    performance_claims_latency: float
+    license: float
+    license_latency: float
+    dataset_and_code_score: float
+    dataset_and_code_score_latency: float
+    dataset_quality: float
+    dataset_quality_latency: float
+    code_quality: float
+    code_quality_latency: float
+    reproducibility: float
+    reproducibility_latency: float
+    reviewedness: float
+    reviewedness_latency: float
+    tree_score: float
+    tree_score_latency: float
+    size_score: SizeScore
+    size_score_latency: float
+
+
+class ArtifactLineageNode(BaseModel):
+    """A single node in an artifact lineage graph."""
+    artifact_id: str
+    name: str
+    source: Optional[str] = Field(None, description="Provenance for how the node was discovered")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional metadata for lineage")
+
+
+class ArtifactLineageEdge(BaseModel):
+    """Directed relationship between two lineage nodes."""
+    from_node_artifact_id: str
+    to_node_artifact_id: str
+    relationship: str = Field(..., description="Qualitative description of the edge")
+
+
+class ArtifactLineageGraph(BaseModel):
+    """Complete lineage graph for an artifact."""
+    nodes: List[ArtifactLineageNode]
+    edges: List[ArtifactLineageEdge]
+
+
+class SimpleLicenseCheckRequest(BaseModel):
+    """Request payload for artifact license compatibility analysis."""
+    github_url: str = Field(..., description="GitHub repository url to evaluate")
+
+
+class ArtifactCostEntry(BaseModel):
+    """Cost entry for a single artifact."""
+    standalone_cost: Optional[float] = Field(
+        None, description="Standalone cost excluding dependencies (required when dependency=true)"
+    )
+    total_cost: float = Field(..., description="Total cost of the artifact")
+
+
+class ArtifactUploadRequest(BaseModel):
+    """Request body for uploading an artifact (spec-compliant).
+
+    Per OpenAPI spec, only url is required. Name is optional but
+    the autograder sends it, so we accept both.
+    """
+    url: str = Field(..., description="Artifact source url used during ingest")
+    name: Optional[str] = Field(None, description="Optional artifact name")

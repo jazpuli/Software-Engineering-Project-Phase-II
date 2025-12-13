@@ -129,3 +129,17 @@ async def get_health_components(db: Session = Depends(get_db)):
         overall_status=overall,
     )
 
+
+@router.get("/tracks")
+async def get_tracks():
+    """
+    Get the list of tracks planned for implementation.
+
+    Returns the tracks that this implementation supports per the ECE 461 spec.
+    """
+    return {
+        "plannedTracks": [
+            "Performance track"
+        ]
+    }
+

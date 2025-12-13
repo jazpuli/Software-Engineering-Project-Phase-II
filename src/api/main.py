@@ -58,19 +58,48 @@ app.add_middleware(
 )
 
 
-# Request timing middleware for health metrics
+# Request logging and timing middleware
 @app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
-    """Track request metrics for health endpoint."""
+async def logging_middleware(request: Request, call_next):
+    """Log requests and track metrics for health endpoint."""
     from src.api.db.database import SessionLocal
     from src.api.db.models import Event
+    from src.api.services.logging import log_request, log_response, log_error
 
     start_time = time.time()
-    response = await call_next(request)
+
+    # Log incoming request
+    body = None
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                import json
+                body = json.loads(body_bytes.decode())
+        except Exception:
+            body = {"_error": "Could not parse body"}
+
+    log_request(
+        method=request.method,
+        path=str(request.url.path),
+        body=body,
+        query_params=dict(request.query_params),
+    )
+
+    # Process request
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        log_error(request.method, str(request.url.path), str(e))
+        raise
+
     latency_ms = int((time.time() - start_time) * 1000)
 
-    # Record event for health metrics (skip health endpoints to avoid recursion)
-    if not request.url.path.startswith("/health"):
+    # Log response
+    log_response(request.method, str(request.url.path), response.status_code)
+
+    # Record event for health metrics (skip health and log endpoints)
+    if not request.url.path.startswith(("/health", "/logs")):
         try:
             db = SessionLocal()
             event = Event(
@@ -89,10 +118,12 @@ async def metrics_middleware(request: Request, call_next):
 
 
 # Include routers
+# IMPORTANT: search router must come before artifacts router because
+# /artifact/byRegEx must match before /artifact/{artifact_type}
+app.include_router(search.router, tags=["Search"])
 app.include_router(artifacts.router, tags=["Artifacts"])
 app.include_router(rating.router, tags=["Rating"])
 app.include_router(ingest.router, tags=["Ingest"])
-app.include_router(search.router, tags=["Search"])
 app.include_router(lineage.router, tags=["Lineage"])
 app.include_router(health.router, tags=["Health"])
 
@@ -123,4 +154,22 @@ async def api_info():
 def get_app_start_time() -> float:
     """Get application start time for uptime calculation."""
     return APP_START_TIME
+
+
+@app.get("/logs")
+async def get_logs(lines: int = 100):
+    """Get the last N lines of request logs for debugging."""
+    from src.api.services.logging import get_log_file_path
+    from fastapi.responses import PlainTextResponse
+
+    log_path = get_log_file_path()
+    try:
+        with open(log_path, "r") as f:
+            all_lines = f.readlines()
+            last_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+            return PlainTextResponse("".join(last_lines))
+    except FileNotFoundError:
+        return PlainTextResponse("No logs yet.")
+    except Exception as e:
+        return PlainTextResponse(f"Error reading logs: {e}")
 

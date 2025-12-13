@@ -67,15 +67,19 @@ class Rating(Base):
     reviewedness = Column(Float, default=-1.0)  # -1 or fraction
     treescore = Column(Float, default=0.0)  # Mean of parent scores
 
-    # Latency metrics
-    net_score_latency = Column(Integer, nullable=True)
-    ramp_up_time_latency = Column(Integer, nullable=True)
-    bus_factor_latency = Column(Integer, nullable=True)
-    license_latency = Column(Integer, nullable=True)
-    performance_claims_latency = Column(Integer, nullable=True)
-    dataset_and_code_score_latency = Column(Integer, nullable=True)
-    dataset_quality_latency = Column(Integer, nullable=True)
-    code_quality_latency = Column(Integer, nullable=True)
+    # Latency metrics (stored as Float for seconds, per OpenAPI spec)
+    net_score_latency = Column(Float, nullable=True)
+    ramp_up_time_latency = Column(Float, nullable=True)
+    bus_factor_latency = Column(Float, nullable=True)
+    license_latency = Column(Float, nullable=True)
+    performance_claims_latency = Column(Float, nullable=True)
+    dataset_and_code_score_latency = Column(Float, nullable=True)
+    dataset_quality_latency = Column(Float, nullable=True)
+    code_quality_latency = Column(Float, nullable=True)
+    reproducibility_latency = Column(Float, nullable=True)
+    reviewedness_latency = Column(Float, nullable=True)
+    tree_score_latency = Column(Float, nullable=True)
+    size_score_latency = Column(Float, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

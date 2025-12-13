@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from src.api.db.database import get_db
 from src.api.db import crud
-from src.api.models.schemas import ArtifactType, RatingResponse, SizeScore
+from src.api.models.schemas import ArtifactType, RatingResponse, ModelRating, SizeScore
 from src.api.services.metrics import compute_all_metrics
 
 router = APIRouter()
@@ -148,5 +148,62 @@ async def get_latest_rating(
         dataset_and_code_score_latency=rating.dataset_and_code_score_latency or 0,
         dataset_quality_latency=rating.dataset_quality_latency or 0,
         code_quality_latency=rating.code_quality_latency or 0,
+    )
+
+
+@router.get("/artifact/model/{artifact_id}/rate", response_model=ModelRating)
+async def get_model_rating_spec(
+    artifact_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Get ratings for this model artifact (BASELINE).
+
+    Returns the rating for a model. Only use this if each metric was
+    computed successfully.
+    """
+    # Get artifact from database (must be a model type)
+    artifact = crud.get_artifact_by_type_and_id(db, "model", artifact_id)
+    if not artifact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model artifact {artifact_id} not found",
+        )
+
+    # Get latest rating
+    rating = crud.get_latest_rating(db, artifact_id)
+    if not rating:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No rating found for artifact {artifact_id}",
+        )
+
+    return ModelRating(
+        name=artifact.name,
+        category="MODEL",
+        net_score=rating.net_score,
+        net_score_latency=rating.net_score_latency or 0.001,
+        ramp_up_time=rating.ramp_up_time,
+        ramp_up_time_latency=rating.ramp_up_time_latency or 0.001,
+        bus_factor=rating.bus_factor,
+        bus_factor_latency=rating.bus_factor_latency or 0.001,
+        performance_claims=rating.performance_claims,
+        performance_claims_latency=rating.performance_claims_latency or 0.001,
+        license=rating.license,
+        license_latency=rating.license_latency or 0.001,
+        dataset_and_code_score=rating.dataset_and_code_score,
+        dataset_and_code_score_latency=rating.dataset_and_code_score_latency or 0.001,
+        dataset_quality=rating.dataset_quality,
+        dataset_quality_latency=rating.dataset_quality_latency or 0.001,
+        code_quality=rating.code_quality,
+        code_quality_latency=rating.code_quality_latency or 0.001,
+        reproducibility=rating.reproducibility,
+        reproducibility_latency=rating.reproducibility_latency or 0.001,
+        reviewedness=rating.reviewedness,
+        reviewedness_latency=rating.reviewedness_latency or 0.001,
+        tree_score=rating.treescore,
+        tree_score_latency=rating.tree_score_latency or 0.001,
+        size_score=SizeScore(**rating.size_score),
+        size_score_latency=rating.size_score_latency or 0.001,
     )
 

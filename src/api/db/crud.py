@@ -91,6 +91,32 @@ def search_artifacts(db: Session, pattern: str, limit: int = 100) -> List[Artifa
     ).limit(limit).all()
 
 
+def search_artifacts_by_name(db: Session, name: str) -> List[Artifact]:
+    """Search artifacts by exact name."""
+    return db.query(Artifact).filter(Artifact.name == name).all()
+
+
+def update_artifact(
+    db: Session,
+    artifact_id: str,
+    url: Optional[str] = None,
+    name: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[Artifact]:
+    """Update an artifact's fields."""
+    artifact = get_artifact(db, artifact_id)
+    if artifact:
+        if url is not None:
+            artifact.url = url
+        if name is not None:
+            artifact.name = name
+        if metadata_json is not None:
+            artifact.metadata_json = metadata_json
+        db.commit()
+        db.refresh(artifact)
+    return artifact
+
+
 def update_artifact_download_url(
     db: Session, artifact_id: str, download_url: str, s3_key: str
 ) -> Optional[Artifact]:
@@ -139,14 +165,18 @@ def create_rating(
         reproducibility=reproducibility,
         reviewedness=reviewedness,
         treescore=treescore,
-        net_score_latency=latencies.get("net_score", 0),
-        ramp_up_time_latency=latencies.get("ramp_up_time", 0),
-        bus_factor_latency=latencies.get("bus_factor", 0),
-        license_latency=latencies.get("license", 0),
-        performance_claims_latency=latencies.get("performance_claims", 0),
-        dataset_and_code_score_latency=latencies.get("dataset_and_code_score", 0),
-        dataset_quality_latency=latencies.get("dataset_quality", 0),
-        code_quality_latency=latencies.get("code_quality", 0),
+        net_score_latency=latencies.get("net_score", 0.0),
+        ramp_up_time_latency=latencies.get("ramp_up_time", 0.0),
+        bus_factor_latency=latencies.get("bus_factor", 0.0),
+        license_latency=latencies.get("license", 0.0),
+        performance_claims_latency=latencies.get("performance_claims", 0.0),
+        dataset_and_code_score_latency=latencies.get("dataset_and_code_score", 0.0),
+        dataset_quality_latency=latencies.get("dataset_quality", 0.0),
+        code_quality_latency=latencies.get("code_quality", 0.0),
+        reproducibility_latency=latencies.get("reproducibility", 0.0),
+        reviewedness_latency=latencies.get("reviewedness", 0.0),
+        tree_score_latency=latencies.get("tree_score", 0.0),
+        size_score_latency=latencies.get("size_score", 0.0),
     )
     db.add(rating)
     db.commit()
@@ -209,6 +239,13 @@ def get_all_dependencies(db: Session, artifact_id: str, visited: Optional[set] =
         all_deps.extend(get_all_dependencies(db, parent.id, visited))
 
     return all_deps
+
+
+def get_lineage_edges(db: Session, artifact_id: str) -> List[LineageEdge]:
+    """Get all lineage edges where this artifact is either parent or child."""
+    return db.query(LineageEdge).filter(
+        (LineageEdge.parent_id == artifact_id) | (LineageEdge.child_id == artifact_id)
+    ).all()
 
 
 # ============ Event CRUD (for health metrics) ============

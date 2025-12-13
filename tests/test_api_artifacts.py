@@ -93,13 +93,15 @@ class TestArtifactsCRUD:
         create_response = client.post("/artifacts/model", json=sample_artifact_data)
         artifact_id = create_response.json()["id"]
 
-        # Get artifact
+        # Get artifact - returns spec-compliant nested format
         response = client.get(f"/artifacts/model/{artifact_id}")
         assert response.status_code == 200
 
         data = response.json()
-        assert data["id"] == artifact_id
-        assert data["name"] == sample_artifact_data["name"]
+        # Spec-compliant format has nested metadata and data
+        assert data["metadata"]["id"] == artifact_id
+        assert data["metadata"]["name"] == sample_artifact_data["name"]
+        assert data["data"]["url"] == sample_artifact_data["url"]
 
     def test_get_artifact_not_found(self, client: TestClient):
         """Test getting non-existent artifact."""
