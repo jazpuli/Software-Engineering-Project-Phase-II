@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Upload Artifact - Trustworthy Model Registry">
+  <title>Upload Artifact - Model Registry</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header role="banner">
+    <div class="container">
+      <a href="/static/index.html" class="logo" aria-label="Trustworthy Model Registry Home">
+        <div class="logo-icon" aria-hidden="true"></div>
+        <span>Model Registry</span>
+      </a>
+      <nav role="navigation" aria-label="Main navigation">
+        <a href="/static/index.html">Artifacts</a>
+        <a href="/static/upload.html" class="active">Upload</a>
+        <a href="/static/health.html">Health</a>
+        <a href="/docs" target="_blank" rel="noopener">API Docs</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content" role="main">
+    <div class="container">
+      <h1>Upload Artifact</h1>
+      <p>Register a new ML artifact or ingest a model from HuggingFace.</p>
+
+      <!-- Tab navigation -->
+      <div style="display: flex; gap: 1rem; margin-bottom: 2rem; border-bottom: 1px solid var(--color-border);">
+        <button class="btn btn-secondary tab-btn active" data-tab="manual" aria-selected="true">Manual Upload</button>
+        <button class="btn btn-secondary tab-btn" data-tab="ingest" aria-selected="false">HuggingFace Ingest</button>
+      </div>
+
+      <!-- Manual Upload Form -->
+      <section id="manual-tab" class="card" aria-labelledby="manual-heading">
+        <h2 id="manual-heading">Register Artifact</h2>
+        <p class="card-meta">Register an artifact from any URL source.</p>
+
+        <form id="upload-form" aria-label="Upload artifact form">
+          <div class="form-group">
+            <label for="artifact-type">Artifact Type *</label>
+            <select id="artifact-type" name="type" required>
+              <option value="model">Model</option>
+              <option value="dataset">Dataset</option>
+              <option value="notebook">Notebook</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="artifact-name">Name (optional)</label>
+            <input type="text" id="artifact-name" name="name" placeholder="my-model-v1">
+            <small style="color: var(--color-text-muted); display: block; margin-top: 0.25rem;">
+              If not provided, name will be derived from URL.
+            </small>
+          </div>
+
+          <div class="form-group">
+            <label for="artifact-url">Source URL *</label>
+            <input type="url" id="artifact-url" name="url" required placeholder="https://huggingface.co/org/model">
+          </div>
+
+          <div style="display: flex; gap: 1rem;">
+            <button type="submit" class="btn btn-primary">Register Artifact</button>
+            <button type="reset" class="btn btn-secondary">Clear</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- HuggingFace Ingest Form -->
+      <section id="ingest-tab" class="card" style="display: none;" aria-labelledby="ingest-heading">
+        <h2 id="ingest-heading">Ingest from HuggingFace</h2>
+        <p class="card-meta">Automatically fetch and rate a model from HuggingFace. Models must meet minimum quality thresholds (&ge; 0.5 on all metrics).</p>
+
+        <form id="ingest-form" aria-label="Ingest from HuggingFace form">
+          <div class="form-group">
+            <label for="hf-url">HuggingFace Model URL *</label>
+            <input type="url" id="hf-url" name="url" required placeholder="https://huggingface.co/google/gemma-3-270m">
+          </div>
+
+          <div class="form-group">
+            <label for="hf-type">Artifact Type</label>
+            <select id="hf-type" name="type">
+              <option value="model">Model</option>
+              <option value="dataset">Dataset</option>
+            </select>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Ingest Model</button>
+        </form>
+      </section>
+
+      <!-- Result Display -->
+      <div id="result" style="display: none; margin-top: 2rem;" aria-live="polite"></div>
+    </div>
+  </main>
+
+  <footer role="contentinfo">
+    <div class="container">
+      <p>&copy; 2024 Trustworthy Model Registry</p>
+      <p>
+        <a href="/health">System Health</a> |
+        <a href="/docs">API Documentation</a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Tab switching
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          // Update active tab button
+          document.querySelectorAll('.tab-btn').forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-selected', 'false');
+          });
+          btn.classList.add('active');
+          btn.setAttribute('aria-selected', 'true');
+
+          // Show/hide tab content
+          const tab = btn.dataset.tab;
+          document.getElementById('manual-tab').style.display = tab === 'manual' ? 'block' : 'none';
+          document.getElementById('ingest-tab').style.display = tab === 'ingest' ? 'block' : 'none';
+          document.getElementById('result').style.display = 'none';
+        });
+      });
+
+      // Manual upload form
+      document.getElementById('upload-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const btn = form.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Uploading...';
+
+        try {
+          const type = form.type.value;
+          const data = {
+            url: form.url.value,
+          };
+          if (form.name.value) {
+            data.name = form.name.value;
+          }
+
+          const artifact = await artifacts.create(type, data);
+          showResult('success', `
+            <h3>Artifact Created!</h3>
+            <p>Name: <strong>${escapeHtml(artifact.name)}</strong></p>
+            <p>ID: <code>${artifact.id}</code></p>
+            <p><a href="/static/artifact.html?id=${artifact.id}&type=${artifact.type}" class="btn btn-primary">View Artifact</a></p>
+          `);
+          form.reset();
+        } catch (error) {
+          showResult('error', `<h3>Upload Failed</h3><p>${escapeHtml(error.message)}</p>`);
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Register Artifact';
+      });
+
+      // HuggingFace ingest form
+      document.getElementById('ingest-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const btn = form.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Ingesting...';
+
+        try {
+          const result = await ingest.huggingface(form.url.value, form.type.value);
+
+          if (result.success) {
+            showResult('success', `
+              <h3>Model Ingested Successfully!</h3>
+              <p>Name: <strong>${escapeHtml(result.artifact.name)}</strong></p>
+              <p>Net Score: <span class="score ${getScoreClass(result.rating.net_score)}">${formatScore(result.rating.net_score)}</span></p>
+              <p><a href="/static/artifact.html?id=${result.artifact.id}&type=${result.artifact.type}" class="btn btn-primary">View Artifact</a></p>
+            `);
+          } else {
+            showResult('warning', `
+              <h3>Ingest Rejected</h3>
+              <p>${escapeHtml(result.message)}</p>
+              <p>The model did not meet minimum quality thresholds.</p>
+            `);
+          }
+          form.reset();
+        } catch (error) {
+          showResult('error', `<h3>Ingest Failed</h3><p>${escapeHtml(error.message)}</p>`);
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Ingest Model';
+      });
+    });
+
+    function showResult(type, html) {
+      const result = document.getElementById('result');
+      result.className = `alert alert-${type} fade-in`;
+      result.innerHTML = html;
+      result.style.display = 'block';
+      result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  </script>
+</body>
+</html>
+

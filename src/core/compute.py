@@ -5,7 +5,11 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Tuple
 
-from metrics import MetricResult, metric_registry
+# Support both import styles: when PYTHONPATH=src (./run) and when running as package
+try:
+    from metrics import MetricResult, metric_registry
+except ImportError:
+    from src.metrics import MetricResult, metric_registry
 
 from .github import analyze_github_urls
 from .hf_api import fetch_hf_model_meta

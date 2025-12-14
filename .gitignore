@@ -1,8 +1,36 @@
+# Environment and secrets
+.env
+pac.txt
+scripts/tokens.txt
+
+# Database and coverage
+registry.db
+.coverage
+coverage.json
+
+# Autograder logs
+autograder_log.txt
+
+# Development/planning docs (not for repo)
+DEVELOPMENT_PLAN.md
+PLAN_REVIEW.md
+TODO.md
+TODO2.md
+README_new.md
+
+# Python
+*.pyc
 __pycache__/
 .venv/
-*.pyc
-.coverage
-htmlcov/
-.pytest_cache/
-.env
+venv/
 
+# IDE
+.idea/
+.DS_Store
+*.swp
+
+# Deployment scripts with credentials
+deploy_manual.py
+
+# OS files
+Thumbs.db
