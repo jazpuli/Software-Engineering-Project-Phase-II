@@ -105,7 +105,8 @@ async def api_key_middleware(request: Request, call_next):
     
     # Skip authentication for public endpoints
     path = request.url.path
-    if any(path.startswith(endpoint) for endpoint in PUBLIC_ENDPOINTS):
+    # Check exact match for "/" or prefix match for other endpoints
+    if path == "/" or any(path.startswith(endpoint) for endpoint in PUBLIC_ENDPOINTS if endpoint != "/"):
         return await call_next(request)
     
     # Check for API key header
