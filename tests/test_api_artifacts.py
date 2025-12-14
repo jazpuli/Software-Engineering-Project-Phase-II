@@ -123,9 +123,9 @@ class TestArtifactsCRUD:
         create_response = client.post("/artifacts/model", json=sample_artifact_data)
         artifact_id = create_response.json()["id"]
 
-        # Delete artifact
+        # Delete artifact (API returns 200 per OpenAPI spec)
         response = client.delete(f"/artifacts/model/{artifact_id}")
-        assert response.status_code == 204
+        assert response.status_code == 200
 
         # Verify deletion
         get_response = client.get(f"/artifacts/model/{artifact_id}")
