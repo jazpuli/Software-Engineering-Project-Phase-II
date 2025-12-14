@@ -19,5 +19,9 @@ pytest-cov>=4.1.0
 httpx>=0.26.0
 moto[s3]>=5.0.0
 
+# Selenium for GUI testing
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
 # Linting
 ruff>=0.1.0

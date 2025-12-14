@@ -124,7 +124,7 @@ class TestUploadPage:
 
     def test_upload_page_loads(self, app_server, browser):
         """Test that the upload page loads."""
-        browser.get(f"{app_server}/upload.html")
+        browser.get(f"{app_server}/static/upload.html")
 
         WebDriverWait(browser, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
@@ -138,7 +138,7 @@ class TestUploadPage:
 
     def test_upload_form_has_submit(self, app_server, browser):
         """Test that the upload form has a submit button."""
-        browser.get(f"{app_server}/upload.html")
+        browser.get(f"{app_server}/static/upload.html")
 
         WebDriverWait(browser, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
