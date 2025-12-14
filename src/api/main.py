@@ -21,6 +21,16 @@ else:
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+# Rate limiting for DoS protection (STRIDE: Denial of Service)
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    RATE_LIMITING_ENABLED = True
+except ImportError:
+    RATE_LIMITING_ENABLED = False
 
 from src.api.db.database import create_tables, get_db
 from src.api.routes import artifacts, rating, ingest, search, lineage, health
@@ -48,6 +58,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Configure rate limiting (STRIDE: DoS protection)
+if RATE_LIMITING_ENABLED:
+    # Create limiter with IP-based key function
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # CORS middleware for frontend
 app.add_middleware(
     CORSMiddleware,
@@ -64,9 +81,21 @@ async def logging_middleware(request: Request, call_next):
     """Log requests and track metrics for health endpoint."""
     from src.api.db.database import SessionLocal
     from src.api.db.models import Event
-    from src.api.services.logging import log_request, log_response, log_error
+    from src.api.services.logging import log_request, log_response, log_error, generate_request_id
 
     start_time = time.time()
+    
+    # Generate unique request ID for correlation (STRIDE: Repudiation)
+    request_id = generate_request_id()
+    
+    # Extract client identification (STRIDE: Repudiation - audit trail)
+    client_ip = request.client.host if request.client else None
+    # Check for forwarded IP (if behind load balancer)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+    
+    user_agent = request.headers.get("User-Agent")
 
     # Log incoming request
     body = None
@@ -84,19 +113,34 @@ async def logging_middleware(request: Request, call_next):
         path=str(request.url.path),
         body=body,
         query_params=dict(request.query_params),
+        client_ip=client_ip,
+        user_agent=user_agent,
+        request_id=request_id,
     )
 
     # Process request
     try:
         response = await call_next(request)
     except Exception as e:
-        log_error(request.method, str(request.url.path), str(e))
+        log_error(
+            method=request.method,
+            path=str(request.url.path),
+            error=str(e),
+            request_id=request_id,
+            client_ip=client_ip,
+        )
         raise
 
     latency_ms = int((time.time() - start_time) * 1000)
 
-    # Log response
-    log_response(request.method, str(request.url.path), response.status_code)
+    # Log response with timing
+    log_response(
+        method=request.method,
+        path=str(request.url.path),
+        status_code=response.status_code,
+        request_id=request_id,
+        latency_ms=latency_ms,
+    )
 
     # Record event for health metrics (skip health and log endpoints)
     if not request.url.path.startswith(("/health", "/logs")):
@@ -126,6 +170,31 @@ app.include_router(rating.router, tags=["Rating"])
 app.include_router(ingest.router, tags=["Ingest"])
 app.include_router(lineage.router, tags=["Lineage"])
 app.include_router(health.router, tags=["Health"])
+
+
+# Global exception handler - returns generic errors to clients (STRIDE: Info Disclosure)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Handle unhandled exceptions with generic error messages.
+    
+    Security: Prevents leaking internal details (stack traces, file paths, etc.)
+    to clients. Detailed errors are logged server-side only.
+    """
+    from src.api.services.logging import log_error
+    
+    # Log detailed error server-side for debugging
+    log_error(
+        method=request.method,
+        path=str(request.url.path),
+        error=f"{type(exc).__name__}: {str(exc)}"
+    )
+    
+    # Return generic message to client
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred. Please try again later."}
+    )
 
 # Mount static files for frontend (create directory if needed)
 static_dir = os.path.join(os.path.dirname(__file__), "..", "..", "static")

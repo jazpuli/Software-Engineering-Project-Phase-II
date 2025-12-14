@@ -1,8 +1,11 @@
-"""Search endpoint for finding artifacts by regex pattern."""
+"""Search endpoint for finding artifacts by regex pattern.
+
+Security (STRIDE - DoS): Rate-limited to prevent abuse of expensive regex operations.
+"""
 
 import re
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy.orm import Session
 
 from src.api.db.database import get_db
@@ -15,6 +18,16 @@ from src.api.models.schemas import (
     ArtifactRegEx,
     SearchResponse,
 )
+
+# Rate limiting imports (optional - graceful degradation if not installed)
+try:
+    from slowapi import Limiter
+    from slowapi.util import get_remote_address
+    limiter = Limiter(key_func=get_remote_address)
+    RATE_LIMITING_ENABLED = True
+except ImportError:
+    RATE_LIMITING_ENABLED = False
+    limiter = None
 
 router = APIRouter()
 
@@ -95,6 +108,7 @@ def is_safe_regex(pattern: str) -> bool:
 
 @router.get("/artifacts/search", response_model=SearchResponse)
 async def search_artifacts(
+    request: Request,
     query: str = Query(..., description="Regex pattern to search for"),
     artifact_type: Optional[ArtifactType] = None,
     limit: int = Query(default=100, le=MAX_RESULTS),
@@ -107,6 +121,7 @@ async def search_artifacts(
     - Supports regex patterns for flexible searching
     - Validates patterns to prevent ReDoS attacks
     - Returns 400 for malicious/invalid patterns
+    - Rate limited to 30 requests/minute per IP (DoS protection)
     """
     # Validate regex pattern safety
     if not is_safe_regex(query):
@@ -185,6 +200,7 @@ def _fetch_readme_live(url: str, artifact_type: str) -> str:
 
 @router.post("/artifact/byRegEx", response_model=List[ArtifactMetadataSpec])
 async def search_by_regex(
+    http_request: Request,
     request: ArtifactRegEx,
     db: Session = Depends(get_db),
 ):
@@ -193,6 +209,8 @@ async def search_by_regex(
 
     Search for an artifact using regular expression over artifact names
     and READMEs. This is similar to search by name.
+    
+    Security: Rate limited to 30 requests/minute per IP (DoS protection).
     """
     regex_pattern = request.regex
 

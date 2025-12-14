@@ -23,5 +23,8 @@ moto[s3]>=5.0.0
 selenium>=4.15.0
 webdriver-manager>=4.0.0
 
+# Security: Rate limiting (STRIDE: DoS protection)
+slowapi>=0.1.9
+
 # Linting
 ruff>=0.1.0
