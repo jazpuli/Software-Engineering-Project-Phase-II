@@ -264,6 +264,31 @@ aws ec2 associate-iam-instance-profile \
 
 The following security mitigations are **already implemented** in the application code:
 
+### API Key Authentication (Spoofing - Risk 1)
+
+**File:** `src/api/main.py`
+
+API key authentication protects the API from unauthorized access:
+
+```python
+# Set the API key via environment variable
+export API_KEY="your-secret-key-here"
+
+# Clients must include the header:
+# X-API-Key: your-secret-key-here
+```
+
+**To enable:**
+1. Generate a secure key: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+2. Set environment variable: `export API_KEY="generated-key"`
+3. Restart the application
+
+**Public endpoints (no key required):**
+- `/health` - Health checks
+- `/docs` - API documentation
+- `/static/*` - Static files
+- `/` - Root redirect
+
 ### Generic Error Messages (Information Disclosure - Risk 2)
 
 **File:** `src/api/main.py`

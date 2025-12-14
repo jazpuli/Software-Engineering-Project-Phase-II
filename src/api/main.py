@@ -39,6 +39,21 @@ from src.api.routes import artifacts, rating, ingest, search, lineage, health
 # Track application start time for uptime calculation
 APP_START_TIME: float = 0
 
+# API Key Authentication (STRIDE: Spoofing protection)
+# Set via environment variable. If not set, authentication is disabled.
+API_KEY = os.environ.get("API_KEY", None)
+API_KEY_HEADER = "X-API-Key"
+
+# Endpoints that don't require authentication
+PUBLIC_ENDPOINTS = (
+    "/health",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/static",
+    "/",
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -73,6 +88,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# API Key Authentication Middleware (STRIDE: Spoofing protection)
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """
+    Validate API key for protected endpoints.
+    
+    Security (STRIDE - Spoofing): Ensures only clients with valid API key
+    can access the API, preventing unauthorized access.
+    """
+    # Skip if API_KEY is not configured (authentication disabled)
+    if API_KEY is None:
+        return await call_next(request)
+    
+    # Skip authentication for public endpoints
+    path = request.url.path
+    if any(path.startswith(endpoint) for endpoint in PUBLIC_ENDPOINTS):
+        return await call_next(request)
+    
+    # Check for API key header
+    provided_key = request.headers.get(API_KEY_HEADER)
+    
+    if not provided_key:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Missing API key. Include X-API-Key header."}
+        )
+    
+    if provided_key != API_KEY:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Invalid API key."}
+        )
+    
+    return await call_next(request)
 
 
 # Request logging and timing middleware
