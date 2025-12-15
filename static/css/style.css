@@ -346,7 +346,7 @@ tr:hover {
 
 .badge-model {
   background: rgba(46, 196, 182, 0.2);
-  color: var(--color-secondary);
+  color: #30cdbf; /* Brighter than --color-secondary for WCAG AA contrast ratio 4.66:1 */
 }
 
 .badge-dataset {
