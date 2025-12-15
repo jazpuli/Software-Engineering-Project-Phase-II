@@ -311,3 +311,4 @@ class TestFindGitHubUrlForModel:
         hf_data = {"cardData": None}
         result = find_github_url_for_model(hf_data)
         assert result is None
+

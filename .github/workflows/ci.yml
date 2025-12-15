@@ -80,3 +80,4 @@ jobs:
           
           # Deploy (uncomment when ready)
           # ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key $EC2_USER@$EC2_HOST 'cd /app && git pull && pip install -r requirements.txt && sudo systemctl restart app'
+

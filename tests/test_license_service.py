@@ -248,3 +248,4 @@ class TestLicenseCompatibilityMap:
         """Test that Creative Commons licenses are in the map."""
         assert "cc-by-4.0" in LICENSE_COMPATIBILITY
         assert "cc-by-sa-4.0" in LICENSE_COMPATIBILITY
+

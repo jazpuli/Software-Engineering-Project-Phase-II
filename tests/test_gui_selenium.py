@@ -233,3 +233,4 @@ class TestAPIIntegration:
 
         # Swagger UI should load
         assert "swagger" in browser.page_source.lower() or "openapi" in browser.page_source.lower() or "fastapi" in browser.page_source.lower()
+
